@@ -56,30 +56,41 @@ async function handleProcessGroup(request, env) {
                 }
 
                 if (aiResponse) {
+                    const segments = aiResponse.segments || [];
+                    const text = aiResponse.text || "";
+
                     // Exhaustive language discovery
                     if (!detectedLanguage) {
                         if (aiResponse.language) detectedLanguage = aiResponse.language;
                         else if (aiResponse.transcription_info && aiResponse.transcription_info.language) detectedLanguage = aiResponse.transcription_info.language;
-                        else if (aiResponse.vtt && aiResponse.vtt.includes('LANGUAGE:')) {
-                            const match = aiResponse.vtt.match(/LANGUAGE:\s*(\w+)/);
-                            if (match) detectedLanguage = match[1];
-                        }
                     }
 
-                    const segments = aiResponse.segments || [];
-                    const text = aiResponse.text || "";
+                    const isHallucination = (t) => {
+                        if (!t || t.trim().length <= 1) return true;
+                        const trimmed = t.trim();
+                        // 1. Specific phrase loop (Japanese/Hindi hallucinations common in Whisper)
+                        if (trimmed.includes("やっぱり") && trimmed.length > 30) return true;
+                        if (trimmed.includes("लाँवाँ") && trimmed.length > 30) return true;
+
+                        // 2. High repetition word count
+                        const words = trimmed.split(/\s+/);
+                        if (words.length > 8) {
+                            const uniqueWords = new Set(words);
+                            if (uniqueWords.size < words.length / 3) return true;
+                        }
+
+                        // 3. Long string with very few unique characters (common in loops)
+                        if (trimmed.length > 100) {
+                            const uniqueChars = new Set(trimmed.replace(/\s+/g, "").split(""));
+                            if (uniqueChars.size < 10) return true;
+                        }
+
+                        return false;
+                    };
 
                     if (segments.length > 0) {
                         segments.forEach(seg => {
-                            if (!seg.text || seg.text.trim().length <= 1) return;
-
-                            // Aggressive hallucination filter
-                            const words = seg.text.trim().split(/\s+/);
-                            if (words.length > 10) {
-                                const uniqueWords = new Set(words);
-                                if (uniqueWords.size < words.length / 3) return; // Too many repetitions
-                            }
-                            if (seg.text.includes("やっぱり") && seg.text.length > 50) return;
+                            if (isHallucination(seg.text)) return;
 
                             allSegments.push({
                                 ...seg,
@@ -88,11 +99,13 @@ async function handleProcessGroup(request, env) {
                             });
                         });
                     } else if (text.trim().length > 1) {
-                        allSegments.push({
-                            start: currentOffset,
-                            end: currentOffset + 10,
-                            text: text.trim()
-                        });
+                        if (!isHallucination(text)) {
+                            allSegments.push({
+                                start: currentOffset,
+                                end: currentOffset + 10,
+                                text: text.trim()
+                            });
+                        }
                     }
                 }
             } catch (e) {
