@@ -24,7 +24,6 @@ async function handleProcessGroup(request, env) {
         }
 
         const allSegments = [];
-        const debugInfo = [];
         let currentOffset = startTime;
         let detectedLanguage = "";
         let effectiveLanguage = language;
@@ -43,7 +42,6 @@ async function handleProcessGroup(request, env) {
                 }
             } catch (e) {
                 console.error("Failed to fetch cross-group context:", e);
-                debugInfo.push({ event: "fetch_context_error", message: e.message });
             }
         }
 
@@ -51,24 +49,19 @@ async function handleProcessGroup(request, env) {
         for (let i = 0; i < tsUrls.length; i += CHUNK_SIZE) {
             const batchUrls = tsUrls.slice(i, i + CHUNK_SIZE);
             const chunks = [];
-            const batchDebug = { batchStartOffset: currentOffset, urls: batchUrls.length };
 
             for (const tsUrl of batchUrls) {
                 try {
                     const res = await fetch(tsUrl);
                     if (res.ok) {
                         chunks.push(new Uint8Array(await res.arrayBuffer()));
-                    } else {
-                        batchDebug.fetchError = `Failed to fetch ${tsUrl} with status ${res.status}`;
                     }
                 } catch (e) {
-                    batchDebug.fetchError = `Fetch error for ${tsUrl}: ${e.message}`;
+                    console.error(`Fetch error for ${tsUrl}: ${e.message}`);
                 }
             }
 
             if (chunks.length === 0) {
-                batchDebug.status = "No chunks fetched";
-                debugInfo.push(batchDebug);
                 currentOffset += batchUrls.length * 10;
                 continue;
             }
@@ -83,7 +76,7 @@ async function handleProcessGroup(request, env) {
             }
 
             const aiOptions = {
-                audio: Array.from(mergedAudio), // Pass as standard array
+                audio: Array.from(mergedAudio),
                 task: 'transcribe',
                 temperature: 0.0,
                 vad_filter: false
@@ -91,29 +84,17 @@ async function handleProcessGroup(request, env) {
             if (effectiveLanguage) aiOptions.language = effectiveLanguage;
             if (lastTranscription) aiOptions.initial_prompt = lastTranscription;
 
-            batchDebug.initialPrompt = lastTranscription;
-
             // Step 1: Try Large V3 Turbo
-            let aiResponse = await env.AI.run('@cf/openai/whisper-large-v3-turbo', aiOptions).catch((e) => {
-                batchDebug.v3Error = e.message;
-                return null;
-            });
+            let aiResponse = await env.AI.run('@cf/openai/whisper-large-v3-turbo', aiOptions).catch(() => null);
 
             // Step 2: Fallback to standard
             if (!aiResponse || (!aiResponse.segments && !aiResponse.text)) {
-                aiResponse = await env.AI.run('@cf/openai/whisper', aiOptions).catch((e) => {
-                    batchDebug.standardError = e.message;
-                    return null;
-                });
+                aiResponse = await env.AI.run('@cf/openai/whisper', aiOptions).catch(() => null);
             }
 
             if (aiResponse) {
                 const segments = aiResponse.segments || [];
                 const text = aiResponse.text || "";
-
-                batchDebug.status = "success";
-                batchDebug.receivedSegments = segments.length;
-                batchDebug.receivedText = text;
 
                 if (text.trim()) {
                     lastTranscription = text.trim();
@@ -127,8 +108,6 @@ async function handleProcessGroup(request, env) {
                         if (!effectiveLanguage) effectiveLanguage = detectedLanguage; // Lock language forcefully for next chunks
                     }
                 }
-
-                batchDebug.usedLanguage = effectiveLanguage;
 
                 if (segments.length > 0) {
                     segments.forEach(seg => {
@@ -146,17 +125,15 @@ async function handleProcessGroup(request, env) {
                     });
                 }
             } else {
-                batchDebug.status = "failed_entirely";
+                console.error(`Batch starting at ${currentOffset} failed entirely.`);
             }
-            debugInfo.push(batchDebug);
             currentOffset += batchUrls.length * 10;
         }
 
         if (allSegments.length === 0) {
             return new Response(JSON.stringify({
                 success: true,
-                message: 'No speech recognized',
-                debug: debugInfo
+                message: 'No speech recognized'
             }), {
                 headers: { 'Content-Type': 'application/json' }
             });
@@ -169,8 +146,7 @@ async function handleProcessGroup(request, env) {
             success: true,
             key: kvKey,
             detectedLanguage: detectedLanguage || language || "unknown",
-            segmentCount: allSegments.length,
-            debug: debugInfo
+            segmentCount: allSegments.length
         }), {
             headers: { 'Content-Type': 'application/json' }
         });
