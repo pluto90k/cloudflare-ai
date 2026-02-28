@@ -47,21 +47,23 @@ async function handleProcessGroup(request, env) {
                 };
                 if (language) aiOptions.language = language;
 
-                // Step 1: Try Large V3 Turbo for quality
+                // Step 1: Try Large V3 Turbo
                 let aiResponse = await env.AI.run('@cf/openai/whisper-large-v3-turbo', aiOptions).catch(() => null);
 
-                // Step 2: Fallback to standard if Turbo fails or is empty
+                // Step 2: Fallback to standard
                 if (!aiResponse || (!aiResponse.segments && !aiResponse.text)) {
                     aiResponse = await env.AI.run('@cf/openai/whisper', aiOptions).catch(() => null);
                 }
 
                 if (aiResponse) {
-                    // Robust language capture
-                    const lang = aiResponse.language ||
-                        (aiResponse.transcription_info && aiResponse.transcription_info.language);
-
-                    if (!detectedLanguage && lang) {
-                        detectedLanguage = lang;
+                    // Exhaustive language discovery
+                    if (!detectedLanguage) {
+                        if (aiResponse.language) detectedLanguage = aiResponse.language;
+                        else if (aiResponse.transcription_info && aiResponse.transcription_info.language) detectedLanguage = aiResponse.transcription_info.language;
+                        else if (aiResponse.vtt && aiResponse.vtt.includes('LANGUAGE:')) {
+                            const match = aiResponse.vtt.match(/LANGUAGE:\s*(\w+)/);
+                            if (match) detectedLanguage = match[1];
+                        }
                     }
 
                     const segments = aiResponse.segments || [];
@@ -69,9 +71,15 @@ async function handleProcessGroup(request, env) {
 
                     if (segments.length > 0) {
                         segments.forEach(seg => {
-                            if (!seg.text || seg.text.trim().length < 2) return;
-                            // Basic hallucination filter for Large V3 Turbo (repetition loop)
-                            if (seg.text.length > 100 && new Set(seg.text.split(" ")).size < 5) return;
+                            if (!seg.text || seg.text.trim().length <= 1) return;
+
+                            // Aggressive hallucination filter
+                            const words = seg.text.trim().split(/\s+/);
+                            if (words.length > 10) {
+                                const uniqueWords = new Set(words);
+                                if (uniqueWords.size < words.length / 3) return; // Too many repetitions
+                            }
+                            if (seg.text.includes("やっぱり") && seg.text.length > 50) return;
 
                             allSegments.push({
                                 ...seg,
@@ -96,7 +104,7 @@ async function handleProcessGroup(request, env) {
         if (allSegments.length === 0) {
             return new Response(JSON.stringify({
                 success: true,
-                message: 'No speech recognized across all segments'
+                message: 'No speech recognized'
             }), {
                 headers: { 'Content-Type': 'application/json' }
             });
