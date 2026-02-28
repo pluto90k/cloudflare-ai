@@ -46,7 +46,8 @@ async function handleProcessGroup(request, env) {
                 };
                 if (language) aiOptions.language = language;
 
-                const aiResponse = await env.AI.run('@cf/openai/whisper-large-v3-turbo', aiOptions);
+                const aiResponse = await env.AI.run('@cf/openai/whisper', aiOptions);
+                const rawResponse = aiResponse; // For debug
 
                 if (aiResponse) {
                     // Try to find detected language in various possible fields
@@ -76,6 +77,7 @@ async function handleProcessGroup(request, env) {
                             text: text.trim()
                         });
                     }
+                    allSegments.debugInfo = rawResponse; // Save last one
                 }
             } catch (e) {
                 console.error(`AI Error for ${tsUrl}:`, e);
@@ -86,7 +88,8 @@ async function handleProcessGroup(request, env) {
         if (allSegments.length === 0) {
             return new Response(JSON.stringify({
                 success: true,
-                message: 'No speech detected in this group'
+                message: 'No speech detected in this group',
+                debug: allSegments.debugInfo || null
             }), {
                 headers: { 'Content-Type': 'application/json' }
             });
@@ -98,7 +101,8 @@ async function handleProcessGroup(request, env) {
         return new Response(JSON.stringify({
             success: true,
             key: kvKey,
-            detectedLanguage: detectedLanguage || language || "unknown"
+            detectedLanguage: detectedLanguage || language || "unknown",
+            rawAiResponse: allSegments.debugInfo || null
         }), {
             headers: { 'Content-Type': 'application/json' }
         });
