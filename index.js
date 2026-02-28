@@ -37,10 +37,11 @@ async function handleProcessGroup(request, env) {
                 const arrayBuffer = await response.arrayBuffer();
                 const audioData = new Uint8Array(arrayBuffer);
 
-                // Use Large V3 Turbo with individual 10s segments
-                // Array.from is the most reliable binary transfer format
-                const aiResponse = await env.AI.run('@cf/openai/whisper-large-v3-turbo', {
-                    audio: Array.from(audioData),
+                // Use standard whisper model with Base64 - Highest compatibility
+                const base64Audio = btoa(String.fromCharCode(...audioData));
+
+                const aiResponse = await env.AI.run('@cf/openai/whisper', {
+                    audio: base64Audio,
                     task: 'transcribe',
                     language: language || 'ko',
                     temperature: 0.0,
@@ -53,7 +54,7 @@ async function handleProcessGroup(request, env) {
 
                     if (segments.length > 0) {
                         segments.forEach(seg => {
-                            if (!seg.text || seg.text.trim().length < 2) return;
+                            if (!seg.text || seg.text.trim().length <= 1) return;
                             allSegments.push({
                                 ...seg,
                                 start: (seg.start || 0) + currentOffset,
@@ -69,13 +70,13 @@ async function handleProcessGroup(request, env) {
                     }
                 }
             } catch (e) {
-                console.error(`Error processing ${tsUrl}:`, e);
+                console.error(`AI Error for ${tsUrl}:`, e);
             }
             currentOffset += 10;
         }
 
         if (allSegments.length === 0) {
-            return new Response(JSON.stringify({ success: true, message: 'No speech detected after final attempt' }), {
+            return new Response(JSON.stringify({ success: true, message: 'Silence or model issue encountered' }), {
                 headers: { 'Content-Type': 'application/json' }
             });
         }
