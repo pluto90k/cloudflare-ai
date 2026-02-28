@@ -25,6 +25,10 @@ async function handleProcessGroup(request, env) {
 
         const allSegments = [];
         let currentOffset = startTime;
+        let previousText = ""; // Context for the next segment
+
+        // Base prompt for context (Pororo and friends)
+        const basePrompt = "뽀로로, 에디, 크롱, 루피, 패티, 포비, 해리, 애니메이션, 한국어 동화 이야기입니다.";
 
         for (const tsUrl of tsUrls) {
             try {
@@ -37,23 +41,33 @@ async function handleProcessGroup(request, env) {
                 const arrayBuffer = await response.arrayBuffer();
                 const audioData = new Uint8Array(arrayBuffer);
 
-                // AI Whisper Inference for each segment individually
-                // This avoids MPEG-TS concatenation issues (multiple headers)
+                // AI Whisper Inference with optimized parameters
                 const aiResponse = await env.AI.run('@cf/openai/whisper', {
-                    audio: Array.from(audioData),
+                    audio: [...audioData],
                     task: 'transcribe',
-                    language: language || 'ko'
+                    language: language || 'ko',
+                    initial_prompt: previousText ? `${basePrompt} ${previousText}` : basePrompt,
+                    temperature: 0.0,
+                    vad_filter: true // Filters out non-speech segments to avoid hallucinations
                 });
 
                 if (!aiResponse) continue;
 
                 let segments = aiResponse.segments;
-                if (!segments && aiResponse.text) {
-                    segments = [{ start: 0, end: 10, text: aiResponse.text }];
+                const text = aiResponse.text || "";
+
+                // Detection of common hallucinations (repetitions)
+                if (text.includes("역시") || text.includes("やっぱり") || text.length > 200 && new Set(text.split(" ")).size < text.split(" ").length / 3) {
+                    // If it looks like a hallucination loop, skip or clean
+                    if (!segments) continue;
+                }
+
+                if (!segments && text.trim().length > 0) {
+                    // Fallback if segments is missing but text exists
+                    segments = [{ start: 0, end: 10, text: text }];
                 }
 
                 if (segments && Array.isArray(segments)) {
-                    // Update global segments with currentOffset
                     segments.forEach(seg => {
                         allSegments.push({
                             ...seg,
@@ -62,23 +76,28 @@ async function handleProcessGroup(request, env) {
                         });
                     });
 
-                    // Increment offset by the duration of the processed segment
-                    // We assume each TS is roughly its own duration. 
-                    // Better to calculate from segments if possible, or just keep global
+                    // Update offset and context
                     const lastSegment = segments[segments.length - 1];
                     if (lastSegment) {
                         currentOffset += lastSegment.end;
+                        previousText = segments.map(s => s.text).join(" ").slice(-200); // Keep last 200 chars as context
                     } else {
-                        currentOffset += 10; // Fallback 10s
+                        currentOffset += 10;
                     }
+                } else {
+                    // No speech detected for this 10s segment
+                    currentOffset += 10;
                 }
             } catch (e) {
                 console.error(`Error processing ${tsUrl}: ${e.message}`);
+                currentOffset += 10; // Maintain clock even on error
             }
         }
 
         if (allSegments.length === 0) {
-            return new Response('No subtitles generated', { status: 400 });
+            return new Response(JSON.stringify({ success: true, message: 'No speech detected' }), {
+                headers: { 'Content-Type': 'application/json' }
+            });
         }
 
         const kvKey = `sub:${jobId}:${groupIndex}`;
