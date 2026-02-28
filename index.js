@@ -50,10 +50,12 @@ async function handleProcessGroup(request, env) {
             offset += chunk.length;
         }
 
+        // Convert Uint8Array to Base64 string for maximum compatibility with Workers AI
+        const base64Audio = btoa(String.fromCharCode.apply(null, mergedAudio));
+
         // Use the much more powerful Large V3 Turbo model
-        // Passing Uint8Array directly is the standard way to send binary data to Workers AI
         const aiResponse = await env.AI.run('@cf/openai/whisper-large-v3-turbo', {
-            audio: mergedAudio,
+            audio: base64Audio,
             task: 'transcribe',
             language: language || 'ko',
             temperature: 0.0,
