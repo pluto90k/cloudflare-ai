@@ -39,7 +39,7 @@ async function handleProcessGroup(request, env) {
                 const arrayBuffer = await response.arrayBuffer();
                 const audioData = new Uint8Array(arrayBuffer);
 
-                // Construct options - if language is not provided, model will auto-detect
+                // whisper-large-v3-turbo is more accurate and modern
                 const aiOptions = {
                     audio: Array.from(audioData),
                     task: 'transcribe',
@@ -48,12 +48,15 @@ async function handleProcessGroup(request, env) {
                 };
                 if (language) aiOptions.language = language;
 
-                const aiResponse = await env.AI.run('@cf/openai/whisper', aiOptions);
+                const aiResponse = await env.AI.run('@cf/openai/whisper-large-v3-turbo', aiOptions);
 
                 if (aiResponse) {
-                    // Capture detected language if not already set
-                    if (!detectedLanguage && aiResponse.language) {
-                        detectedLanguage = aiResponse.language;
+                    // Robust language detection capture
+                    const lang = aiResponse.language ||
+                        (aiResponse.transcription_info && aiResponse.transcription_info.language);
+
+                    if (!detectedLanguage && lang) {
+                        detectedLanguage = lang;
                     }
 
                     const segments = aiResponse.segments || [];
