@@ -49,15 +49,13 @@ async function handleProcessGroup(request, env) {
             offset += chunk.length;
         }
 
-        // Use high-performance whisper-large-v3-turbo
-        // CRITICAL: Pass the Uint8Array DIRECTLY. 
-        // DO NOT use [...mergedAudio] or Array.from(mergedAudio) as it causes "Maximum call stack size exceeded"
-        const aiResponse = await env.AI.run('@cf/openai/whisper-large-v3-turbo', {
-            audio: mergedAudio,
+        // Use the standard whisper model for better binary compatibility
+        const aiResponse = await env.AI.run('@cf/openai/whisper', {
+            audio: [...mergedAudio],
             task: 'transcribe',
             language: language || 'ko',
             temperature: 0.0,
-            vad_filter: false // Disable to ensure all speech is caught
+            vad_filter: false
         });
 
         if (!aiResponse || (!aiResponse.segments && !aiResponse.text)) {
