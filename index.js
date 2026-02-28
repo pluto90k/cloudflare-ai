@@ -26,6 +26,8 @@ async function handleProcessGroup(request, env) {
         const allSegments = [];
         let currentOffset = startTime;
 
+        let detectedLanguage = "";
+
         for (const tsUrl of tsUrls) {
             try {
                 const response = await fetch(tsUrl);
@@ -37,31 +39,36 @@ async function handleProcessGroup(request, env) {
                 const arrayBuffer = await response.arrayBuffer();
                 const audioData = new Uint8Array(arrayBuffer);
 
-                // Use standard whisper model with Base64 - Highest compatibility
-                const base64Audio = btoa(String.fromCharCode(...audioData));
-
-                const aiResponse = await env.AI.run('@cf/openai/whisper', {
-                    audio: base64Audio,
+                // Construct options - if language is not provided, model will auto-detect
+                const aiOptions = {
+                    audio: Array.from(audioData),
                     task: 'transcribe',
-                    language: language || 'ko',
                     temperature: 0.0,
                     vad_filter: false
-                });
+                };
+                if (language) aiOptions.language = language;
+
+                const aiResponse = await env.AI.run('@cf/openai/whisper', aiOptions);
 
                 if (aiResponse) {
+                    // Capture detected language if not already set
+                    if (!detectedLanguage && aiResponse.language) {
+                        detectedLanguage = aiResponse.language;
+                    }
+
                     const segments = aiResponse.segments || [];
                     const text = aiResponse.text || "";
 
                     if (segments.length > 0) {
                         segments.forEach(seg => {
-                            if (!seg.text || seg.text.trim().length <= 1) return;
+                            if (!seg.text || seg.text.trim().length === 0) return;
                             allSegments.push({
                                 ...seg,
                                 start: (seg.start || 0) + currentOffset,
                                 end: (seg.end || 0) + currentOffset
                             });
                         });
-                    } else if (text.trim().length > 1) {
+                    } else if (text.trim().length > 0) {
                         allSegments.push({
                             start: currentOffset,
                             end: currentOffset + 10,
@@ -84,7 +91,11 @@ async function handleProcessGroup(request, env) {
         const kvKey = `sub:${jobId}:${groupIndex}`;
         await env.SUBTITLE_KV.put(kvKey, JSON.stringify(allSegments));
 
-        return new Response(JSON.stringify({ success: true, key: kvKey }), {
+        return new Response(JSON.stringify({
+            success: true,
+            key: kvKey,
+            detectedLanguage: detectedLanguage || language || "unknown"
+        }), {
             headers: { 'Content-Type': 'application/json' }
         });
 
