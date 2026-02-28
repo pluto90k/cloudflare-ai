@@ -68,21 +68,21 @@ async function handleProcessGroup(request, env) {
                     const isHallucination = (t) => {
                         if (!t || t.trim().length <= 1) return true;
                         const trimmed = t.trim();
-                        // 1. Specific phrase loop (Japanese/Hindi hallucinations common in Whisper)
+                        // 1. Specific phrase loop
                         if (trimmed.includes("やっぱり") && trimmed.length > 30) return true;
                         if (trimmed.includes("लाँवाँ") && trimmed.length > 30) return true;
 
-                        // 2. High repetition word count
+                        // 2. High repetition word count (Loosened)
                         const words = trimmed.split(/\s+/);
-                        if (words.length > 8) {
+                        if (words.length > 15) {
                             const uniqueWords = new Set(words);
-                            if (uniqueWords.size < words.length / 3) return true;
+                            if (uniqueWords.size < words.length / 4) return true;
                         }
 
-                        // 3. Long string with very few unique characters (common in loops)
-                        if (trimmed.length > 100) {
+                        // 3. Long string with very few unique characters (Loosened)
+                        if (trimmed.length > 150) {
                             const uniqueChars = new Set(trimmed.replace(/\s+/g, "").split(""));
-                            if (uniqueChars.size < 10) return true;
+                            if (uniqueChars.size < 12) return true;
                         }
 
                         return false;
@@ -107,6 +107,7 @@ async function handleProcessGroup(request, env) {
                             });
                         }
                     }
+                    allSegments.lastRawResponse = aiResponse; // For debug
                 }
             } catch (e) {
                 console.error(`Segment error for ${tsUrl}:`, e);
@@ -117,7 +118,8 @@ async function handleProcessGroup(request, env) {
         if (allSegments.length === 0) {
             return new Response(JSON.stringify({
                 success: true,
-                message: 'No speech recognized'
+                message: 'No speech recognized',
+                debug: allSegments.lastRawResponse || null
             }), {
                 headers: { 'Content-Type': 'application/json' }
             });
