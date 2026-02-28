@@ -23,70 +23,66 @@ async function handleProcessGroup(request, env) {
             return new Response('Missing parameters', { status: 400 });
         }
 
-        const chunks = [];
+        const allSegments = [];
+        let currentOffset = startTime;
+
         for (const tsUrl of tsUrls) {
             try {
                 const response = await fetch(tsUrl);
-                if (response.ok) {
-                    const arrayBuffer = await response.arrayBuffer();
-                    chunks.push(new Uint8Array(arrayBuffer));
-                } else {
+                if (!response.ok) {
                     console.error(`Failed to fetch ${tsUrl}: ${response.statusText}`);
+                    continue;
+                }
+
+                const arrayBuffer = await response.arrayBuffer();
+                const audioData = new Uint8Array(arrayBuffer);
+
+                // AI Whisper Inference for each segment individually
+                // This avoids MPEG-TS concatenation issues (multiple headers)
+                const aiResponse = await env.AI.run('@cf/openai/whisper', {
+                    audio: Array.from(audioData),
+                    task: 'transcribe',
+                    language: language || 'ko'
+                });
+
+                if (!aiResponse) continue;
+
+                let segments = aiResponse.segments;
+                if (!segments && aiResponse.text) {
+                    segments = [{ start: 0, end: 10, text: aiResponse.text }];
+                }
+
+                if (segments && Array.isArray(segments)) {
+                    // Update global segments with currentOffset
+                    segments.forEach(seg => {
+                        allSegments.push({
+                            ...seg,
+                            start: (seg.start || 0) + currentOffset,
+                            end: (seg.end || 0) + currentOffset
+                        });
+                    });
+
+                    // Increment offset by the duration of the processed segment
+                    // We assume each TS is roughly its own duration. 
+                    // Better to calculate from segments if possible, or just keep global
+                    const lastSegment = segments[segments.length - 1];
+                    if (lastSegment) {
+                        currentOffset += lastSegment.end;
+                    } else {
+                        currentOffset += 10; // Fallback 10s
+                    }
                 }
             } catch (e) {
-                console.error(`Error fetching ${tsUrl}: ${e.message}`);
+                console.error(`Error processing ${tsUrl}: ${e.message}`);
             }
         }
 
-        if (chunks.length === 0) {
-            return new Response('No valid TS files found', { status: 400 });
+        if (allSegments.length === 0) {
+            return new Response('No subtitles generated', { status: 400 });
         }
 
-        // Merge chunks
-        const totalLength = chunks.reduce((acc, chunk) => acc + chunk.length, 0);
-        const merged = new Uint8Array(totalLength);
-        let offset = 0;
-        for (const chunk of chunks) {
-            merged.set(chunk, offset);
-            offset += chunk.length;
-        }
-
-        // AI Whisper Inference
-        const aiResponse = await env.AI.run('@cf/openai/whisper', {
-            audio: [...merged],
-            task: 'transcribe',
-            language: language || 'ko'
-        });
-
-        if (!aiResponse) {
-            return new Response('AI Model failed to return any response', { status: 500 });
-        }
-
-        // Whisper sometimes returns segments, sometimes just text. 
-        let segments = aiResponse.segments;
-
-        if (!segments && aiResponse.text) {
-            segments = [{
-                start: 0,
-                end: 30, // Default duration
-                text: aiResponse.text
-            }];
-        }
-
-        if (!segments || !Array.isArray(segments)) {
-            return new Response('AI Model failed to return translatable segments or text', { status: 500 });
-        }
-
-        // Adjust timestamps
-        const adjustedSegments = segments.map(segment => ({
-            ...segment,
-            start: (segment.start || 0) + startTime,
-            end: (segment.end || 0) + startTime
-        }));
-
-        // Store adjusted segments in KV
         const kvKey = `sub:${jobId}:${groupIndex}`;
-        await env.SUBTITLE_KV.put(kvKey, JSON.stringify(adjustedSegments));
+        await env.SUBTITLE_KV.put(kvKey, JSON.stringify(allSegments));
 
         return new Response(JSON.stringify({ success: true, key: kvKey }), {
             headers: { 'Content-Type': 'application/json' }
