@@ -55,18 +55,31 @@ async function handleProcessGroup(request, env) {
             audio: [...merged],
         });
 
-        if (!aiResponse || !aiResponse.vtt) {
-            // If vtt is not available, we might need to handle JSON or other formats
-            // Whisper usually returns { text: "...", vtt: "...", segments: [...] }
-            return new Response('AI Model failed to return VTT', { status: 500 });
+        if (!aiResponse) {
+            return new Response('AI Model failed to return any response', { status: 500 });
         }
 
-        // Adjust timestamps in segments if VTT format is not easy to parse directly
-        // Usually, whisper returns segments: [ { start: 0, end: 1.5, text: "..." }, ... ]
-        const adjustedSegments = aiResponse.segments.map(segment => ({
+        // Whisper sometimes returns segments, sometimes just text. 
+        // If segments is missing, we create a single segment from text if available.
+        let segments = aiResponse.segments;
+
+        if (!segments && aiResponse.text) {
+            segments = [{
+                start: 0,
+                end: 30, // Default duration if unknown
+                text: aiResponse.text
+            }];
+        }
+
+        if (!segments || !Array.isArray(segments)) {
+            return new Response('AI Model failed to return translatable segments or text', { status: 500 });
+        }
+
+        // Adjust timestamps in segments
+        const adjustedSegments = segments.map(segment => ({
             ...segment,
-            start: segment.start + startTime,
-            end: segment.end + startTime
+            start: (segment.start || 0) + startTime,
+            end: (segment.end || 0) + startTime
         }));
 
         // Store adjusted segments in KV
