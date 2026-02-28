@@ -26,6 +26,24 @@ async function handleProcessGroup(request, env) {
         const allSegments = [];
         let currentOffset = startTime;
         let detectedLanguage = "";
+        let effectiveLanguage = language;
+        let lastTranscription = "";
+
+        // Get context from previous group if available
+        if (groupIndex > 0) {
+            try {
+                const prevKey = `sub:${jobId}:${groupIndex - 1}`;
+                const prevData = await env.SUBTITLE_KV.get(prevKey);
+                if (prevData) {
+                    const prevSegments = JSON.parse(prevData);
+                    if (prevSegments.length > 0) {
+                        lastTranscription = prevSegments[prevSegments.length - 1].text;
+                    }
+                }
+            } catch (e) {
+                console.error("Failed to fetch cross-group context:", e);
+            }
+        }
 
         for (const tsUrl of tsUrls) {
             try {
@@ -45,7 +63,8 @@ async function handleProcessGroup(request, env) {
                     temperature: 0.0,
                     vad_filter: false
                 };
-                if (language) aiOptions.language = language;
+                if (effectiveLanguage) aiOptions.language = effectiveLanguage;
+                if (lastTranscription) aiOptions.initial_prompt = lastTranscription;
 
                 // Step 1: Try Large V3 Turbo
                 let aiResponse = await env.AI.run('@cf/openai/whisper-large-v3-turbo', aiOptions).catch(() => null);
@@ -59,10 +78,19 @@ async function handleProcessGroup(request, env) {
                     const segments = aiResponse.segments || [];
                     const text = aiResponse.text || "";
 
+                    // Update context for next segment
+                    if (text.trim()) {
+                        lastTranscription = text.trim();
+                    }
+
                     // Exhaustive language discovery
                     if (!detectedLanguage) {
-                        if (aiResponse.language) detectedLanguage = aiResponse.language;
-                        else if (aiResponse.transcription_info && aiResponse.transcription_info.language) detectedLanguage = aiResponse.transcription_info.language;
+                        const langData = aiResponse.language ||
+                            (aiResponse.transcription_info && aiResponse.transcription_info.language);
+                        if (langData) {
+                            detectedLanguage = langData;
+                            if (!effectiveLanguage) effectiveLanguage = langData; // Lock language for consistency
+                        }
                     }
 
                     const isHallucination = (t) => {
