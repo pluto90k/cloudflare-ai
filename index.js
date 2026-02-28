@@ -118,8 +118,7 @@ async function handleProcessGroup(request, env) {
         if (allSegments.length === 0) {
             return new Response(JSON.stringify({
                 success: true,
-                message: 'No speech recognized',
-                debug: allSegments.lastRawResponse || null
+                message: 'No speech recognized'
             }), {
                 headers: { 'Content-Type': 'application/json' }
             });
@@ -131,8 +130,6 @@ async function handleProcessGroup(request, env) {
         return new Response(JSON.stringify({
             success: true,
             key: kvKey,
-            segmentCount: allSegments.length,
-            sample: allSegments.length > 0 ? allSegments[0].text : null,
             detectedLanguage: detectedLanguage || language || "unknown"
         }), {
             headers: { 'Content-Type': 'application/json' }
