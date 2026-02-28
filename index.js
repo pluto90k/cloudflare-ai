@@ -16,7 +16,8 @@ export default {
 
 async function handleProcessGroup(request, env) {
     try {
-        const { jobId, groupIndex, startTime, tsUrls } = await request.json();
+        const body = await request.json();
+        const { jobId, groupIndex, startTime, tsUrls, language } = body;
 
         if (!jobId || groupIndex === undefined || startTime === undefined || !tsUrls) {
             return new Response('Missing parameters', { status: 400 });
@@ -53,6 +54,8 @@ async function handleProcessGroup(request, env) {
         // AI Whisper Inference
         const aiResponse = await env.AI.run('@cf/openai/whisper', {
             audio: [...merged],
+            task: 'transcribe',
+            language: language || 'ko'
         });
 
         if (!aiResponse) {
@@ -60,13 +63,12 @@ async function handleProcessGroup(request, env) {
         }
 
         // Whisper sometimes returns segments, sometimes just text. 
-        // If segments is missing, we create a single segment from text if available.
         let segments = aiResponse.segments;
 
         if (!segments && aiResponse.text) {
             segments = [{
                 start: 0,
-                end: 30, // Default duration if unknown
+                end: 30, // Default duration
                 text: aiResponse.text
             }];
         }
@@ -75,7 +77,7 @@ async function handleProcessGroup(request, env) {
             return new Response('AI Model failed to return translatable segments or text', { status: 500 });
         }
 
-        // Adjust timestamps in segments
+        // Adjust timestamps
         const adjustedSegments = segments.map(segment => ({
             ...segment,
             start: (segment.start || 0) + startTime,
