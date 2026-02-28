@@ -24,44 +24,24 @@ async function handleProcessGroup(request, env) {
         }
 
         const allSegments = [];
-        let currentGroupStartTime = startTime;
+        let currentOffset = startTime;
 
-        // Fetch all TS chunks first
-        const chunks = [];
         for (const tsUrl of tsUrls) {
             try {
                 const response = await fetch(tsUrl);
-                if (response.ok) {
-                    const arrayBuffer = await response.arrayBuffer();
-                    chunks.push(new Uint8Array(arrayBuffer));
+                if (!response.ok) {
+                    currentOffset += 10;
+                    continue;
                 }
-            } catch (e) {
-                console.error(`Error fetching ${tsUrl}: ${e.message}`);
-            }
-        }
 
-        if (chunks.length === 0) {
-            return new Response(JSON.stringify({ success: true, message: 'No valid audio files' }), {
-                headers: { 'Content-Type': 'application/json' }
-            });
-        }
+                const arrayBuffer = await response.arrayBuffer();
+                const audioData = new Uint8Array(arrayBuffer);
 
-        // Process in batches of 2 segments (~20s) for optimal context vs stability
-        const batchSize = 2;
-        for (let i = 0; i < chunks.length; i += batchSize) {
-            const batch = chunks.slice(i, i + batchSize);
-            const batchTotalLength = batch.reduce((acc, chunk) => acc + chunk.length, 0);
-            const batchAudio = new Uint8Array(batchTotalLength);
-            let offset = 0;
-            for (const chunk of batch) {
-                batchAudio.set(chunk, offset);
-                offset += chunk.length;
-            }
+                // Convert to Base64 - Guaranteed compatibility for Large V3 Turbo
+                const base64Audio = btoa(String.fromCharCode(...audioData));
 
-            try {
-                // Large V3 Turbo with Direct TypedArray transfer
                 const aiResponse = await env.AI.run('@cf/openai/whisper-large-v3-turbo', {
-                    audio: batchAudio,
+                    audio: base64Audio,
                     task: 'transcribe',
                     language: language || 'ko',
                     temperature: 0.0,
@@ -74,32 +54,30 @@ async function handleProcessGroup(request, env) {
 
                     if (segments && Array.isArray(segments) && segments.length > 0) {
                         segments.forEach(seg => {
-                            if (!seg.text || seg.text.trim().length === 0) return;
+                            if (!seg.text || seg.text.trim().length <= 1) return;
 
                             allSegments.push({
                                 ...seg,
-                                start: (seg.start || 0) + currentGroupStartTime,
-                                end: (seg.end || 0) + currentGroupStartTime
+                                start: (seg.start || 0) + currentOffset,
+                                end: (seg.end || 0) + currentOffset
                             });
                         });
-                    } else if (text.trim().length > 0) {
-                        // Fallback to full text if segments are missing
+                    } else if (text.trim().length > 1) {
                         allSegments.push({
-                            start: currentGroupStartTime,
-                            end: currentGroupStartTime + (10 * batch.length),
+                            start: currentOffset,
+                            end: currentOffset + 10,
                             text: text.trim()
                         });
                     }
                 }
             } catch (e) {
-                console.error(`Error processing batch starting at index ${i}:`, e);
+                console.error(`Error processing segment:`, e);
             }
-            // Increment global clock by 10s * number of segments in batch
-            currentGroupStartTime += 10 * batch.length;
+            currentOffset += 10;
         }
 
         if (allSegments.length === 0) {
-            return new Response(JSON.stringify({ success: true, message: 'No speech recognized' }), {
+            return new Response(JSON.stringify({ success: true, message: 'No speech recognized in any segments' }), {
                 headers: { 'Content-Type': 'application/json' }
             });
         }
