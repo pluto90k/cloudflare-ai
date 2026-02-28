@@ -129,6 +129,8 @@ async function handleProcessGroup(request, env) {
         return new Response(JSON.stringify({
             success: true,
             key: kvKey,
+            segmentCount: allSegments.length,
+            sample: allSegments.length > 0 ? allSegments[0].text : null,
             detectedLanguage: detectedLanguage || language || "unknown"
         }), {
             headers: { 'Content-Type': 'application/json' }
