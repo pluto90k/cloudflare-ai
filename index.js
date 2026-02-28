@@ -106,7 +106,8 @@ async function handleProcessGroup(request, env) {
         return new Response(JSON.stringify({
             success: true,
             key: kvKey,
-            detectedLanguage: detectedLanguage || language || "unknown"
+            detectedLanguage: detectedLanguage || language || "unknown",
+            rawAiResponse: allSegments.lastAiResponse || null
         }), {
             headers: { 'Content-Type': 'application/json' }
         });
