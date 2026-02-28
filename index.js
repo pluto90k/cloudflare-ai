@@ -48,10 +48,10 @@ async function handleProcessGroup(request, env) {
                 };
                 if (language) aiOptions.language = language;
 
-                const aiResponse = await env.AI.run('@cf/openai/whisper-large-v3-turbo', aiOptions);
+                const aiResponse = await env.AI.run('@cf/openai/whisper', aiOptions);
 
                 if (aiResponse) {
-                    // Robust language detection capture
+                    // Capture detected language if not already set
                     const lang = aiResponse.language ||
                         (aiResponse.transcription_info && aiResponse.transcription_info.language);
 
@@ -61,6 +61,10 @@ async function handleProcessGroup(request, env) {
 
                     const segments = aiResponse.segments || [];
                     const text = aiResponse.text || "";
+
+                    if (segments.length === 0 && text.trim().length === 0) {
+                        console.error(`Empty result for ${tsUrl}:`, JSON.stringify(aiResponse));
+                    }
 
                     if (segments.length > 0) {
                         segments.forEach(seg => {
