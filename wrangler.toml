@@ -1,0 +1,10 @@
+name = "cloudflare-ai"
+main = "index.js"
+compatibility_date = "2024-03-01"
+
+[ai]
+binding = "AI"
+
+[[kv_namespaces]]
+binding = "SUBTITLE_KV"
+id = "xxxxxxxxxxxx" # User will need to replace this with their actual KV ID
