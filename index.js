@@ -37,20 +37,26 @@ async function handleProcessGroup(request, env) {
 
                 const arrayBuffer = await response.arrayBuffer();
                 const audioData = new Uint8Array(arrayBuffer);
+                const audioArray = Array.from(audioData);
 
                 const aiOptions = {
-                    audio: Array.from(audioData),
+                    audio: audioArray,
                     task: 'transcribe',
                     temperature: 0.0,
                     vad_filter: false
                 };
                 if (language) aiOptions.language = language;
 
-                const aiResponse = await env.AI.run('@cf/openai/whisper', aiOptions);
-                const rawResponse = aiResponse; // For debug
+                // Step 1: Try Large V3 Turbo for quality
+                let aiResponse = await env.AI.run('@cf/openai/whisper-large-v3-turbo', aiOptions).catch(() => null);
+
+                // Step 2: Fallback to standard if Turbo fails or is empty
+                if (!aiResponse || (!aiResponse.segments && !aiResponse.text)) {
+                    aiResponse = await env.AI.run('@cf/openai/whisper', aiOptions).catch(() => null);
+                }
 
                 if (aiResponse) {
-                    // Try to find detected language in various possible fields
+                    // Robust language capture
                     const lang = aiResponse.language ||
                         (aiResponse.transcription_info && aiResponse.transcription_info.language);
 
@@ -64,6 +70,9 @@ async function handleProcessGroup(request, env) {
                     if (segments.length > 0) {
                         segments.forEach(seg => {
                             if (!seg.text || seg.text.trim().length < 2) return;
+                            // Basic hallucination filter for Large V3 Turbo (repetition loop)
+                            if (seg.text.length > 100 && new Set(seg.text.split(" ")).size < 5) return;
+
                             allSegments.push({
                                 ...seg,
                                 start: (seg.start || 0) + currentOffset,
@@ -77,10 +86,9 @@ async function handleProcessGroup(request, env) {
                             text: text.trim()
                         });
                     }
-                    allSegments.debugInfo = rawResponse; // Save last one
                 }
             } catch (e) {
-                console.error(`AI Error for ${tsUrl}:`, e);
+                console.error(`Segment error for ${tsUrl}:`, e);
             }
             currentOffset += 10;
         }
@@ -88,8 +96,7 @@ async function handleProcessGroup(request, env) {
         if (allSegments.length === 0) {
             return new Response(JSON.stringify({
                 success: true,
-                message: 'No speech detected in this group',
-                debug: allSegments.debugInfo || null
+                message: 'No speech recognized across all segments'
             }), {
                 headers: { 'Content-Type': 'application/json' }
             });
@@ -101,8 +108,7 @@ async function handleProcessGroup(request, env) {
         return new Response(JSON.stringify({
             success: true,
             key: kvKey,
-            detectedLanguage: detectedLanguage || language || "unknown",
-            rawAiResponse: allSegments.debugInfo || null
+            detectedLanguage: detectedLanguage || language || "unknown"
         }), {
             headers: { 'Content-Type': 'application/json' }
         });
