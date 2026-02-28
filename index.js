@@ -25,10 +25,7 @@ async function handleProcessGroup(request, env) {
 
         const allSegments = [];
         let currentOffset = startTime;
-        let previousText = ""; // Context for the next segment
-
-        // Base prompt for context (Pororo and friends)
-        const basePrompt = "뽀로로, 에디, 크롱, 루피, 패티, 포비, 해리, 애니메이션, 한국어 동화 이야기입니다.";
+        let previousText = ""; // Context for linguistic continuity
 
         for (const tsUrl of tsUrls) {
             try {
@@ -41,26 +38,20 @@ async function handleProcessGroup(request, env) {
                 const arrayBuffer = await response.arrayBuffer();
                 const audioData = new Uint8Array(arrayBuffer);
 
-                // AI Whisper Inference with optimized parameters
+                // AI Whisper Inference - Generalized for various audio types
                 const aiResponse = await env.AI.run('@cf/openai/whisper', {
                     audio: [...audioData],
                     task: 'transcribe',
                     language: language || 'ko',
-                    initial_prompt: previousText ? `${basePrompt} ${previousText}` : basePrompt,
-                    temperature: 0.0,
-                    vad_filter: true // Filters out non-speech segments to avoid hallucinations
+                    initial_prompt: previousText, // Maintain continuity between segments
+                    temperature: 0.1, // Slight temperature for better adaptation to varying audio
+                    vad_filter: true
                 });
 
                 if (!aiResponse) continue;
 
                 let segments = aiResponse.segments;
                 const text = aiResponse.text || "";
-
-                // Detection of common hallucinations (repetitions)
-                if (text.includes("역시") || text.includes("やっぱり") || text.length > 200 && new Set(text.split(" ")).size < text.split(" ").length / 3) {
-                    // If it looks like a hallucination loop, skip or clean
-                    if (!segments) continue;
-                }
 
                 if (!segments && text.trim().length > 0) {
                     // Fallback if segments is missing but text exists
@@ -80,12 +71,13 @@ async function handleProcessGroup(request, env) {
                     const lastSegment = segments[segments.length - 1];
                     if (lastSegment) {
                         currentOffset += lastSegment.end;
-                        previousText = segments.map(s => s.text).join(" ").slice(-200); // Keep last 200 chars as context
+                        // Use only the last segment for context to avoid bloating the prompt
+                        previousText = lastSegment.text.slice(-100);
                     } else {
                         currentOffset += 10;
                     }
                 } else {
-                    // No speech detected for this 10s segment
+                    // No speech detected for this segment
                     currentOffset += 10;
                 }
             } catch (e) {
