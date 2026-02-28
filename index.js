@@ -25,7 +25,6 @@ async function handleProcessGroup(request, env) {
 
         const allSegments = [];
         let currentOffset = startTime;
-
         let detectedLanguage = "";
 
         for (const tsUrl of tsUrls) {
@@ -39,7 +38,6 @@ async function handleProcessGroup(request, env) {
                 const arrayBuffer = await response.arrayBuffer();
                 const audioData = new Uint8Array(arrayBuffer);
 
-                // whisper-large-v3-turbo is more accurate and modern
                 const aiOptions = {
                     audio: Array.from(audioData),
                     task: 'transcribe',
@@ -48,11 +46,10 @@ async function handleProcessGroup(request, env) {
                 };
                 if (language) aiOptions.language = language;
 
-                const aiResponse = await env.AI.run('@cf/openai/whisper', aiOptions);
-                allSegments.lastAiResponse = aiResponse; // Debug
+                const aiResponse = await env.AI.run('@cf/openai/whisper-large-v3-turbo', aiOptions);
 
                 if (aiResponse) {
-                    // Capture detected language if not already set
+                    // Try to find detected language in various possible fields
                     const lang = aiResponse.language ||
                         (aiResponse.transcription_info && aiResponse.transcription_info.language);
 
@@ -63,20 +60,16 @@ async function handleProcessGroup(request, env) {
                     const segments = aiResponse.segments || [];
                     const text = aiResponse.text || "";
 
-                    if (segments.length === 0 && text.trim().length === 0) {
-                        console.error(`Empty result for ${tsUrl}:`, JSON.stringify(aiResponse));
-                    }
-
                     if (segments.length > 0) {
                         segments.forEach(seg => {
-                            if (!seg.text || seg.text.trim().length === 0) return;
+                            if (!seg.text || seg.text.trim().length < 2) return;
                             allSegments.push({
                                 ...seg,
                                 start: (seg.start || 0) + currentOffset,
                                 end: (seg.end || 0) + currentOffset
                             });
                         });
-                    } else if (text.trim().length > 0) {
+                    } else if (text.trim().length > 1) {
                         allSegments.push({
                             start: currentOffset,
                             end: currentOffset + 10,
@@ -93,8 +86,7 @@ async function handleProcessGroup(request, env) {
         if (allSegments.length === 0) {
             return new Response(JSON.stringify({
                 success: true,
-                message: 'Silence or model issue encountered',
-                debug: allSegments.lastAiResponse || null
+                message: 'No speech detected in this group'
             }), {
                 headers: { 'Content-Type': 'application/json' }
             });
@@ -106,8 +98,7 @@ async function handleProcessGroup(request, env) {
         return new Response(JSON.stringify({
             success: true,
             key: kvKey,
-            detectedLanguage: detectedLanguage || language || "unknown",
-            rawAiResponse: allSegments.lastAiResponse || null
+            detectedLanguage: detectedLanguage || language || "unknown"
         }), {
             headers: { 'Content-Type': 'application/json' }
         });
