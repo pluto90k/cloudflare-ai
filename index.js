@@ -49,6 +49,7 @@ async function handleProcessGroup(request, env) {
                 if (language) aiOptions.language = language;
 
                 const aiResponse = await env.AI.run('@cf/openai/whisper', aiOptions);
+                allSegments.lastAiResponse = aiResponse; // Debug
 
                 if (aiResponse) {
                     // Capture detected language if not already set
@@ -90,7 +91,11 @@ async function handleProcessGroup(request, env) {
         }
 
         if (allSegments.length === 0) {
-            return new Response(JSON.stringify({ success: true, message: 'Silence or model issue encountered' }), {
+            return new Response(JSON.stringify({
+                success: true,
+                message: 'Silence or model issue encountered',
+                debug: allSegments.lastAiResponse || null
+            }), {
                 headers: { 'Content-Type': 'application/json' }
             });
         }
