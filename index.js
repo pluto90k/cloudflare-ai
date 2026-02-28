@@ -68,22 +68,26 @@ async function handleProcessGroup(request, env) {
                     vad_filter: false
                 });
 
-                if (aiResponse && (aiResponse.segments || aiResponse.text)) {
+                if (aiResponse) {
                     let segments = aiResponse.segments;
-                    if (!segments && aiResponse.text) {
-                        segments = [{ start: 0, end: 10 * batch.length, text: aiResponse.text }];
-                    }
+                    const text = aiResponse.text || "";
 
-                    if (segments && Array.isArray(segments)) {
+                    if (segments && Array.isArray(segments) && segments.length > 0) {
                         segments.forEach(seg => {
-                            // Basic hallucination filter for very short repetitions
-                            if (seg.text.trim().length <= 2 && /^[가-힣a-zA-Z\s]+$/.test(seg.text)) return;
+                            if (!seg.text || seg.text.trim().length === 0) return;
 
                             allSegments.push({
                                 ...seg,
                                 start: (seg.start || 0) + currentGroupStartTime,
                                 end: (seg.end || 0) + currentGroupStartTime
                             });
+                        });
+                    } else if (text.trim().length > 0) {
+                        // Fallback to full text if segments are missing
+                        allSegments.push({
+                            start: currentGroupStartTime,
+                            end: currentGroupStartTime + (10 * batch.length),
+                            text: text.trim()
                         });
                     }
                 }
