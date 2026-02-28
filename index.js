@@ -24,22 +24,42 @@ async function handleProcessGroup(request, env) {
         }
 
         const allSegments = [];
-        let currentOffset = startTime;
+        let currentBatchStartTime = startTime;
 
+        // Fetch all TS chunks
+        const chunks = [];
         for (const tsUrl of tsUrls) {
             try {
                 const response = await fetch(tsUrl);
-                if (!response.ok) {
-                    currentOffset += 10;
-                    continue;
+                if (response.ok) {
+                    const arrayBuffer = await response.arrayBuffer();
+                    chunks.push(new Uint8Array(arrayBuffer));
                 }
+            } catch (e) {
+                console.error(`Fetch error: ${tsUrl}`, e);
+            }
+        }
 
-                const arrayBuffer = await response.arrayBuffer();
-                const audioData = new Uint8Array(arrayBuffer);
+        if (chunks.length === 0) {
+            return new Response('No audio data', { status: 400 });
+        }
 
-                // Use the most powerful model with the most reliable binary transfer method
+        // Whisper is optimized for 30s chunks. We group 3 TS segments (~30s).
+        const batchSize = 3;
+        for (let i = 0; i < chunks.length; i += batchSize) {
+            const batch = chunks.slice(i, i + batchSize);
+            const totalLen = batch.reduce((acc, c) => acc + c.length, 0);
+            const merged = new Uint8Array(totalLen);
+            let offset = 0;
+            for (const c of batch) {
+                merged.set(c, offset);
+                offset += c.length;
+            }
+
+            try {
+                // Use Large V3 Turbo with the 30s merged chunk
                 const aiResponse = await env.AI.run('@cf/openai/whisper-large-v3-turbo', {
-                    audio: Array.from(audioData),
+                    audio: Array.from(merged),
                     task: 'transcribe',
                     language: language || 'ko',
                     temperature: 0.0,
@@ -47,35 +67,34 @@ async function handleProcessGroup(request, env) {
                 });
 
                 if (aiResponse) {
-                    let segments = aiResponse.segments;
+                    const segments = aiResponse.segments || [];
                     const text = aiResponse.text || "";
 
-                    if (segments && Array.isArray(segments) && segments.length > 0) {
+                    if (segments.length > 0) {
                         segments.forEach(seg => {
-                            if (!seg.text || seg.text.trim().length <= 1) return;
-
+                            if (!seg.text || seg.text.trim().length < 2) return;
                             allSegments.push({
                                 ...seg,
-                                start: (seg.start || 0) + currentOffset,
-                                end: (seg.end || 0) + currentOffset
+                                start: (seg.start || 0) + currentBatchStartTime,
+                                end: (seg.end || 0) + currentBatchStartTime
                             });
                         });
                     } else if (text.trim().length > 1) {
                         allSegments.push({
-                            start: currentOffset,
-                            end: currentOffset + 10,
+                            start: currentBatchStartTime,
+                            end: currentBatchStartTime + (10 * batch.length),
                             text: text.trim()
                         });
                     }
                 }
             } catch (e) {
-                console.error(`Error processing segment:`, e);
+                console.error("AI Batch Error:", e);
             }
-            currentOffset += 10;
+            currentBatchStartTime += 10 * batch.length;
         }
 
         if (allSegments.length === 0) {
-            return new Response(JSON.stringify({ success: true, message: 'No speech recognized in any segments' }), {
+            return new Response(JSON.stringify({ success: true, message: 'No speech detected' }), {
                 headers: { 'Content-Type': 'application/json' }
             });
         }
