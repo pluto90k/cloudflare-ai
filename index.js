@@ -119,14 +119,16 @@ async function handleProcessGroup(request, env) {
                     lastTranscription = text.trim();
                 }
 
-                // Language discovery
+                // Exhaustive Language discovery
                 if (!detectedLanguage) {
-                    const langData = aiResponse.language || (aiResponse.transcription_info && aiResponse.transcription_info.language);
-                    if (langData) {
-                        detectedLanguage = langData;
-                        if (!effectiveLanguage) effectiveLanguage = langData; // Lock language
+                    let langObj = aiResponse.language || (aiResponse.transcription_info && aiResponse.transcription_info.language);
+                    if (langObj) {
+                        detectedLanguage = typeof langObj === 'string' ? langObj : JSON.stringify(langObj);
+                        if (!effectiveLanguage) effectiveLanguage = detectedLanguage; // Lock language forcefully for next chunks
                     }
                 }
+
+                batchDebug.usedLanguage = effectiveLanguage;
 
                 if (segments.length > 0) {
                     segments.forEach(seg => {
