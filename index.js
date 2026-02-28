@@ -116,6 +116,7 @@ async function handleProcessGroup(request, env) {
                 }
 
                 if (segments.length > 0) {
+                    console.log("AI Response Segments:", segments);
                     segments.forEach(seg => {
                         allSegments.push({
                             ...seg,
@@ -124,12 +125,15 @@ async function handleProcessGroup(request, env) {
                         });
                     });
                 } else if (text.trim().length > 1) {
+                    console.log("AI Response Text:", text);
                     allSegments.push({
                         start: currentOffset,
                         end: currentOffset + (batchUrls.length * 10),
                         text: text.trim()
                     });
                 }
+            } else {
+                console.error(`Batch starting at ${currentOffset} failed entirely.`);
             }
             currentOffset += batchUrls.length * 10;
         }
@@ -149,7 +153,8 @@ async function handleProcessGroup(request, env) {
         return new Response(JSON.stringify({
             success: true,
             key: kvKey,
-            detectedLanguage: detectedLanguage || language || "unknown"
+            detectedLanguage: detectedLanguage || language || "unknown",
+            segmentCount: allSegments.length
         }), {
             headers: { 'Content-Type': 'application/json' }
         });
