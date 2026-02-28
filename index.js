@@ -37,11 +37,9 @@ async function handleProcessGroup(request, env) {
                 const arrayBuffer = await response.arrayBuffer();
                 const audioData = new Uint8Array(arrayBuffer);
 
-                // Convert to Base64 - Guaranteed compatibility for Large V3 Turbo
-                const base64Audio = btoa(String.fromCharCode(...audioData));
-
+                // Use the most powerful model with the most reliable binary transfer method
                 const aiResponse = await env.AI.run('@cf/openai/whisper-large-v3-turbo', {
-                    audio: base64Audio,
+                    audio: Array.from(audioData),
                     task: 'transcribe',
                     language: language || 'ko',
                     temperature: 0.0,
