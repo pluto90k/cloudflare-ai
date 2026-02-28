@@ -7,4 +7,4 @@ binding = "AI"
 
 [[kv_namespaces]]
 binding = "SUBTITLE_KV"
-id = "xxxxxxxxxxxx" # User will need to replace this with their actual KV ID
+id = "d2b887baaf9f4ddbad85f814fe5e836f" # User will need to replace this with their actual KV ID
