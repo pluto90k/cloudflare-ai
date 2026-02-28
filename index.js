@@ -35,23 +35,27 @@ async function handleProcessGroup(request, env) {
                 const arrayBuffer = await response.arrayBuffer();
                 const audioData = new Uint8Array(arrayBuffer);
 
-                // Use Large V3 Turbo for high quality
-                // Processing individually avoids "Maximum call stack" and MPEG-TS header issues
-                const aiResponse = await env.AI.run('@cf/openai/whisper-large-v3-turbo', {
-                    audio: Array.from(audioData),
+                // Use the standard whisper model for better stability across diverse TS inputs
+                // vad_filter is disabled to avoid over-aggressive silence detection
+                const aiResponse = await env.AI.run('@cf/openai/whisper', {
+                    audio: [...audioData],
                     task: 'transcribe',
                     language: language || 'ko',
                     initial_prompt: previousText,
                     temperature: 0.0,
-                    vad_filter: true
+                    vad_filter: false
                 });
 
-                if (!aiResponse) continue;
+                if (!aiResponse) {
+                    console.error(`AI returned no response for ${tsUrl}`);
+                    currentOffset += 10;
+                    continue;
+                }
 
                 const segments = aiResponse.segments;
                 const text = aiResponse.text || "";
 
-                if (segments && Array.isArray(segments)) {
+                if (segments && Array.isArray(segments) && segments.length > 0) {
                     segments.forEach(seg => {
                         allSegments.push({
                             ...seg,
@@ -60,13 +64,9 @@ async function handleProcessGroup(request, env) {
                         });
                     });
 
-                    if (segments.length > 0) {
-                        const lastSeg = segments[segments.length - 1];
-                        currentOffset += lastSeg.end;
-                        previousText = lastSeg.text;
-                    } else {
-                        currentOffset += 10; // Fallback for 10s TS
-                    }
+                    const lastSeg = segments[segments.length - 1];
+                    currentOffset += lastSeg.end;
+                    previousText = lastSeg.text.slice(-100);
                 } else if (text.trim().length > 0) {
                     allSegments.push({
                         start: currentOffset,
@@ -74,7 +74,7 @@ async function handleProcessGroup(request, env) {
                         text: text.trim()
                     });
                     currentOffset += 10;
-                    previousText = text.trim();
+                    previousText = text.trim().slice(-100);
                 } else {
                     currentOffset += 10;
                 }
