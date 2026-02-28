@@ -51,8 +51,9 @@ async function handleProcessGroup(request, env) {
         }
 
         // Use the much more powerful Large V3 Turbo model
+        // Passing Uint8Array directly is more efficient and avoids schema mismatch errors
         const aiResponse = await env.AI.run('@cf/openai/whisper-large-v3-turbo', {
-            audio: [...mergedAudio],
+            audio: Array.from(mergedAudio),
             task: 'transcribe',
             language: language || 'ko',
             temperature: 0.0,
