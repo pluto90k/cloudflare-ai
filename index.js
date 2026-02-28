@@ -49,9 +49,9 @@ async function handleProcessGroup(request, env) {
             offset += chunk.length;
         }
 
-        // Use the standard whisper model for better binary compatibility
+        // Use the standard whisper model with precise array input
         const aiResponse = await env.AI.run('@cf/openai/whisper', {
-            audio: [...mergedAudio],
+            audio: Array.from(mergedAudio),
             task: 'transcribe',
             language: language || 'ko',
             temperature: 0.0,
