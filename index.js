@@ -24,42 +24,23 @@ async function handleProcessGroup(request, env) {
         }
 
         const allSegments = [];
-        let currentBatchStartTime = startTime;
+        let currentOffset = startTime;
 
-        // Fetch all TS chunks
-        const chunks = [];
         for (const tsUrl of tsUrls) {
             try {
                 const response = await fetch(tsUrl);
-                if (response.ok) {
-                    const arrayBuffer = await response.arrayBuffer();
-                    chunks.push(new Uint8Array(arrayBuffer));
+                if (!response.ok) {
+                    currentOffset += 10;
+                    continue;
                 }
-            } catch (e) {
-                console.error(`Fetch error: ${tsUrl}`, e);
-            }
-        }
 
-        if (chunks.length === 0) {
-            return new Response('No audio data', { status: 400 });
-        }
+                const arrayBuffer = await response.arrayBuffer();
+                const audioData = new Uint8Array(arrayBuffer);
 
-        // Whisper is optimized for 30s chunks. We group 3 TS segments (~30s).
-        const batchSize = 3;
-        for (let i = 0; i < chunks.length; i += batchSize) {
-            const batch = chunks.slice(i, i + batchSize);
-            const totalLen = batch.reduce((acc, c) => acc + c.length, 0);
-            const merged = new Uint8Array(totalLen);
-            let offset = 0;
-            for (const c of batch) {
-                merged.set(c, offset);
-                offset += c.length;
-            }
-
-            try {
-                // Use Large V3 Turbo with the 30s merged chunk
+                // Use Large V3 Turbo with individual 10s segments
+                // Array.from is the most reliable binary transfer format
                 const aiResponse = await env.AI.run('@cf/openai/whisper-large-v3-turbo', {
-                    audio: Array.from(merged),
+                    audio: Array.from(audioData),
                     task: 'transcribe',
                     language: language || 'ko',
                     temperature: 0.0,
@@ -75,26 +56,26 @@ async function handleProcessGroup(request, env) {
                             if (!seg.text || seg.text.trim().length < 2) return;
                             allSegments.push({
                                 ...seg,
-                                start: (seg.start || 0) + currentBatchStartTime,
-                                end: (seg.end || 0) + currentBatchStartTime
+                                start: (seg.start || 0) + currentOffset,
+                                end: (seg.end || 0) + currentOffset
                             });
                         });
                     } else if (text.trim().length > 1) {
                         allSegments.push({
-                            start: currentBatchStartTime,
-                            end: currentBatchStartTime + (10 * batch.length),
+                            start: currentOffset,
+                            end: currentOffset + 10,
                             text: text.trim()
                         });
                     }
                 }
             } catch (e) {
-                console.error("AI Batch Error:", e);
+                console.error(`Error processing ${tsUrl}:`, e);
             }
-            currentBatchStartTime += 10 * batch.length;
+            currentOffset += 10;
         }
 
         if (allSegments.length === 0) {
-            return new Response(JSON.stringify({ success: true, message: 'No speech detected' }), {
+            return new Response(JSON.stringify({ success: true, message: 'No speech detected after final attempt' }), {
                 headers: { 'Content-Type': 'application/json' }
             });
         }
