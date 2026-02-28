@@ -23,142 +23,62 @@ async function handleProcessGroup(request, env) {
             return new Response('Missing parameters', { status: 400 });
         }
 
-        const allSegments = [];
-        let currentOffset = startTime;
-        let detectedLanguage = "";
-        let effectiveLanguage = language;
-        let lastTranscription = "";
-
-        // Get context from previous group if available
-        if (groupIndex > 0) {
-            try {
-                const prevKey = `sub:${jobId}:${groupIndex - 1}`;
-                const prevData = await env.SUBTITLE_KV.get(prevKey);
-                if (prevData) {
-                    const prevSegments = JSON.parse(prevData);
-                    if (prevSegments.length > 0) {
-                        lastTranscription = prevSegments[prevSegments.length - 1].text;
-                    }
-                }
-            } catch (e) {
-                console.error("Failed to fetch cross-group context:", e);
-            }
-        }
-
+        const chunks = [];
         for (const tsUrl of tsUrls) {
             try {
-                const response = await fetch(tsUrl);
-                if (!response.ok) {
-                    currentOffset += 10;
-                    continue;
-                }
-
-                const arrayBuffer = await response.arrayBuffer();
-                const audioData = new Uint8Array(arrayBuffer);
-                const audioArray = Array.from(audioData);
-
-                const aiOptions = {
-                    audio: audioArray,
-                    task: 'transcribe',
-                    temperature: 0.0,
-                    vad_filter: false
-                };
-                if (effectiveLanguage) aiOptions.language = effectiveLanguage;
-                if (lastTranscription) aiOptions.initial_prompt = lastTranscription;
-
-                // Step 1: Try Large V3 Turbo
-                let aiResponse = await env.AI.run('@cf/openai/whisper-large-v3-turbo', aiOptions).catch(() => null);
-
-                // Step 2: Fallback to standard
-                if (!aiResponse || (!aiResponse.segments && !aiResponse.text)) {
-                    aiResponse = await env.AI.run('@cf/openai/whisper', aiOptions).catch(() => null);
-                }
-
-                if (aiResponse) {
-                    const segments = aiResponse.segments || [];
-                    const text = aiResponse.text || "";
-
-                    // Update context for next segment
-                    if (text.trim()) {
-                        lastTranscription = text.trim();
-                    }
-
-                    // Exhaustive language discovery
-                    if (!detectedLanguage) {
-                        const langData = aiResponse.language ||
-                            (aiResponse.transcription_info && aiResponse.transcription_info.language);
-                        if (langData) {
-                            detectedLanguage = langData;
-                            if (!effectiveLanguage) effectiveLanguage = langData; // Lock language for consistency
-                        }
-                    }
-
-                    const isHallucination = (t) => {
-                        if (!t || t.trim().length <= 1) return true;
-                        const trimmed = t.trim();
-                        // 1. Specific phrase loop
-                        if (trimmed.includes("やっぱり") && trimmed.length > 30) return true;
-                        if (trimmed.includes("लाँवाँ") && trimmed.length > 30) return true;
-
-                        // 2. High repetition word count (Loosened)
-                        const words = trimmed.split(/\s+/);
-                        if (words.length > 15) {
-                            const uniqueWords = new Set(words);
-                            if (uniqueWords.size < words.length / 4) return true;
-                        }
-
-                        // 3. Long string with very few unique characters (Loosened)
-                        if (trimmed.length > 150) {
-                            const uniqueChars = new Set(trimmed.replace(/\s+/g, "").split(""));
-                            if (uniqueChars.size < 12) return true;
-                        }
-
-                        return false;
-                    };
-
-                    if (segments.length > 0) {
-                        segments.forEach(seg => {
-                            if (isHallucination(seg.text)) return;
-
-                            allSegments.push({
-                                ...seg,
-                                start: (seg.start || 0) + currentOffset,
-                                end: (seg.end || 0) + currentOffset
-                            });
-                        });
-                    } else if (text.trim().length > 1) {
-                        if (!isHallucination(text)) {
-                            allSegments.push({
-                                start: currentOffset,
-                                end: currentOffset + 10,
-                                text: text.trim()
-                            });
-                        }
-                    }
-                    allSegments.lastRawResponse = aiResponse; // For debug
+                const res = await fetch(tsUrl);
+                if (res.ok) {
+                    chunks.push(new Uint8Array(await res.arrayBuffer()));
                 }
             } catch (e) {
-                console.error(`Segment error for ${tsUrl}:`, e);
+                console.error(`Fetch error for ${tsUrl}:`, e);
             }
-            currentOffset += 10;
         }
 
-        if (allSegments.length === 0) {
-            return new Response(JSON.stringify({
-                success: true,
-                message: 'No speech recognized'
-            }), {
-                headers: { 'Content-Type': 'application/json' }
-            });
+        if (chunks.length === 0) {
+            return new Response('No audio chunks fetched', { status: 400 });
         }
+
+        // Merge all chunks into one
+        const totalSize = chunks.reduce((acc, c) => acc + c.length, 0);
+        const mergedAudio = new Uint8Array(totalSize);
+        let offset = 0;
+        for (const chunk of chunks) {
+            mergedAudio.set(chunk, offset);
+            offset += chunk.length;
+        }
+
+        const aiOptions = {
+            audio: Array.from(mergedAudio),
+            task: 'transcribe',
+            temperature: 0.0,
+            vad_filter: false
+        };
+        if (language) aiOptions.language = language;
+
+        const aiResponse = await env.AI.run('@cf/openai/whisper-large-v3-turbo', aiOptions);
+
+        if (!aiResponse) {
+            return new Response('AI processing failed', { status: 500 });
+        }
+
+        const detectedLanguage = aiResponse.language ||
+            (aiResponse.transcription_info && aiResponse.transcription_info.language) ||
+            "unknown";
+
+        const segments = (aiResponse.segments || []).map(seg => ({
+            ...seg,
+            start: seg.start + startTime,
+            end: seg.end + startTime
+        }));
 
         const kvKey = `sub:${jobId}:${groupIndex}`;
-        await env.SUBTITLE_KV.put(kvKey, JSON.stringify(allSegments));
+        await env.SUBTITLE_KV.put(kvKey, JSON.stringify(segments));
 
         return new Response(JSON.stringify({
             success: true,
             key: kvKey,
-            detectedLanguage: detectedLanguage || language || "unknown"
+            detectedLanguage: detectedLanguage
         }), {
             headers: { 'Content-Type': 'application/json' }
         });
