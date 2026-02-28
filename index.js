@@ -23,69 +23,81 @@ async function handleProcessGroup(request, env) {
             return new Response('Missing parameters', { status: 400 });
         }
 
-        const chunks = [];
+        const allSegments = [];
+        let currentOffset = startTime;
+        let previousText = "";
+
+        // Common context hints for various audio types
+        const baseHint = "한국어 전문 비디오 트랜스크립션 서비스입니다. 문맥에 맞게 정확하게 전사합니다.";
+
         for (const tsUrl of tsUrls) {
             try {
                 const response = await fetch(tsUrl);
-                if (response.ok) {
-                    const arrayBuffer = await response.arrayBuffer();
-                    chunks.push(new Uint8Array(arrayBuffer));
+                if (!response.ok) {
+                    console.error(`Fetch failed for ${tsUrl}: ${response.statusText}`);
+                    currentOffset += 10;
+                    continue;
+                }
+
+                const arrayBuffer = await response.arrayBuffer();
+                const audioData = new Uint8Array(arrayBuffer);
+
+                // Convert to Base64 - most reliable format for large-v3-turbo
+                const base64Audio = btoa(String.fromCharCode(...audioData));
+
+                const aiResponse = await env.AI.run('@cf/openai/whisper-large-v3-turbo', {
+                    audio: base64Audio,
+                    task: 'transcribe',
+                    language: language || 'ko',
+                    initial_prompt: previousText || baseHint,
+                    temperature: 0.0
+                });
+
+                if (!aiResponse) {
+                    currentOffset += 10;
+                    continue;
+                }
+
+                const segments = aiResponse.segments;
+                const text = aiResponse.text || "";
+
+                if (segments && Array.isArray(segments) && segments.length > 0) {
+                    segments.forEach(seg => {
+                        allSegments.push({
+                            ...seg,
+                            start: (seg.start || 0) + currentOffset,
+                            end: (seg.end || 0) + currentOffset
+                        });
+                    });
+
+                    const lastSeg = segments[segments.length - 1];
+                    currentOffset += lastSeg.end;
+                    previousText = lastSeg.text.slice(-100);
+                } else if (text.trim().length > 0 && !text.includes("어?")) {
+                    allSegments.push({
+                        start: currentOffset,
+                        end: currentOffset + 10,
+                        text: text.trim()
+                    });
+                    currentOffset += 10;
+                    previousText = text.trim().slice(-100);
+                } else {
+                    currentOffset += 10;
                 }
             } catch (e) {
-                console.error(`Error fetching ${tsUrl}: ${e.message}`);
+                console.error(`Error processing ${tsUrl}:`, e);
+                currentOffset += 10;
             }
         }
 
-        if (chunks.length === 0) {
-            return new Response('No valid audio data found', { status: 400 });
-        }
-
-        // Merge all chunks into a single Uint8Array
-        const totalLength = chunks.reduce((acc, chunk) => acc + chunk.length, 0);
-        const mergedAudio = new Uint8Array(totalLength);
-        let offset = 0;
-        for (const chunk of chunks) {
-            mergedAudio.set(chunk, offset);
-            offset += chunk.length;
-        }
-
-        // Use the standard whisper model with precise array input
-        const aiResponse = await env.AI.run('@cf/openai/whisper', {
-            audio: Array.from(mergedAudio),
-            task: 'transcribe',
-            language: language || 'ko',
-            temperature: 0.0,
-            vad_filter: false
-        });
-
-        if (!aiResponse || (!aiResponse.segments && !aiResponse.text)) {
-            return new Response(JSON.stringify({ success: true, message: 'No speech detected by AI' }), {
-                headers: { 'Content-Type': 'application/json' }
-            });
-        }
-
-        let segments = aiResponse.segments;
-        if (!segments && aiResponse.text) {
-            segments = [{ start: 0, end: 30, text: aiResponse.text }];
-        }
-
-        // Adjust timestamps and filter empty results
-        const adjustedSegments = segments
-            .filter(seg => seg.text && seg.text.trim().length > 0)
-            .map(seg => ({
-                ...seg,
-                start: (seg.start || 0) + startTime,
-                end: (seg.end || 0) + startTime
-            }));
-
-        if (adjustedSegments.length === 0) {
-            return new Response(JSON.stringify({ success: true, message: 'Silence detected after filtering' }), {
+        if (allSegments.length === 0) {
+            return new Response(JSON.stringify({ success: true, message: 'Silence or no speech detected' }), {
                 headers: { 'Content-Type': 'application/json' }
             });
         }
 
         const kvKey = `sub:${jobId}:${groupIndex}`;
-        await env.SUBTITLE_KV.put(kvKey, JSON.stringify(adjustedSegments));
+        await env.SUBTITLE_KV.put(kvKey, JSON.stringify(allSegments));
 
         return new Response(JSON.stringify({ success: true, key: kvKey }), {
             headers: { 'Content-Type': 'application/json' }
