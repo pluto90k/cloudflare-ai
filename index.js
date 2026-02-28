@@ -24,74 +24,78 @@ async function handleProcessGroup(request, env) {
         }
 
         const allSegments = [];
-        let currentOffset = startTime;
-        let previousText = "";
+        let currentGroupStartTime = startTime;
 
-        // Common context hints for various audio types
-        const baseHint = "한국어 전문 비디오 트랜스크립션 서비스입니다. 문맥에 맞게 정확하게 전사합니다.";
-
+        // Fetch all TS chunks first
+        const chunks = [];
         for (const tsUrl of tsUrls) {
             try {
                 const response = await fetch(tsUrl);
-                if (!response.ok) {
-                    console.error(`Fetch failed for ${tsUrl}: ${response.statusText}`);
-                    currentOffset += 10;
-                    continue;
-                }
-
-                const arrayBuffer = await response.arrayBuffer();
-                const audioData = new Uint8Array(arrayBuffer);
-
-                // Convert to Base64 - most reliable format for large-v3-turbo
-                const base64Audio = btoa(String.fromCharCode(...audioData));
-
-                const aiResponse = await env.AI.run('@cf/openai/whisper-large-v3-turbo', {
-                    audio: base64Audio,
-                    task: 'transcribe',
-                    language: language || 'ko',
-                    initial_prompt: previousText || baseHint,
-                    temperature: 0.0
-                });
-
-                if (!aiResponse) {
-                    currentOffset += 10;
-                    continue;
-                }
-
-                const segments = aiResponse.segments;
-                const text = aiResponse.text || "";
-
-                if (segments && Array.isArray(segments) && segments.length > 0) {
-                    segments.forEach(seg => {
-                        allSegments.push({
-                            ...seg,
-                            start: (seg.start || 0) + currentOffset,
-                            end: (seg.end || 0) + currentOffset
-                        });
-                    });
-
-                    const lastSeg = segments[segments.length - 1];
-                    currentOffset += lastSeg.end;
-                    previousText = lastSeg.text.slice(-100);
-                } else if (text.trim().length > 0 && !text.includes("어?")) {
-                    allSegments.push({
-                        start: currentOffset,
-                        end: currentOffset + 10,
-                        text: text.trim()
-                    });
-                    currentOffset += 10;
-                    previousText = text.trim().slice(-100);
-                } else {
-                    currentOffset += 10;
+                if (response.ok) {
+                    const arrayBuffer = await response.arrayBuffer();
+                    chunks.push(new Uint8Array(arrayBuffer));
                 }
             } catch (e) {
-                console.error(`Error processing ${tsUrl}:`, e);
-                currentOffset += 10;
+                console.error(`Error fetching ${tsUrl}: ${e.message}`);
             }
         }
 
+        if (chunks.length === 0) {
+            return new Response(JSON.stringify({ success: true, message: 'No valid audio files' }), {
+                headers: { 'Content-Type': 'application/json' }
+            });
+        }
+
+        // Process in batches of 2 segments (~20s) for optimal context vs stability
+        const batchSize = 2;
+        for (let i = 0; i < chunks.length; i += batchSize) {
+            const batch = chunks.slice(i, i + batchSize);
+            const batchTotalLength = batch.reduce((acc, chunk) => acc + chunk.length, 0);
+            const batchAudio = new Uint8Array(batchTotalLength);
+            let offset = 0;
+            for (const chunk of batch) {
+                batchAudio.set(chunk, offset);
+                offset += chunk.length;
+            }
+
+            try {
+                // Large V3 Turbo with Direct TypedArray transfer
+                const aiResponse = await env.AI.run('@cf/openai/whisper-large-v3-turbo', {
+                    audio: batchAudio,
+                    task: 'transcribe',
+                    language: language || 'ko',
+                    temperature: 0.0,
+                    vad_filter: false
+                });
+
+                if (aiResponse && (aiResponse.segments || aiResponse.text)) {
+                    let segments = aiResponse.segments;
+                    if (!segments && aiResponse.text) {
+                        segments = [{ start: 0, end: 10 * batch.length, text: aiResponse.text }];
+                    }
+
+                    if (segments && Array.isArray(segments)) {
+                        segments.forEach(seg => {
+                            // Basic hallucination filter for very short repetitions
+                            if (seg.text.trim().length <= 2 && /^[가-힣a-zA-Z\s]+$/.test(seg.text)) return;
+
+                            allSegments.push({
+                                ...seg,
+                                start: (seg.start || 0) + currentGroupStartTime,
+                                end: (seg.end || 0) + currentGroupStartTime
+                            });
+                        });
+                    }
+                }
+            } catch (e) {
+                console.error(`Error processing batch starting at index ${i}:`, e);
+            }
+            // Increment global clock by 10s * number of segments in batch
+            currentGroupStartTime += 10 * batch.length;
+        }
+
         if (allSegments.length === 0) {
-            return new Response(JSON.stringify({ success: true, message: 'Silence or no speech detected' }), {
+            return new Response(JSON.stringify({ success: true, message: 'No speech recognized' }), {
                 headers: { 'Content-Type': 'application/json' }
             });
         }
