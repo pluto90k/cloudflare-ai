@@ -22,11 +22,16 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Deploy to Cloudflare Workers
+      - name: Create D1 Tables (Remote)
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CF_API_TOKEN }}
           accountId: ${{ secrets.CF_ACCOUNT_ID }}
-          command: |
-            d1 execute subtitle_db --remote --file=./schema.sql --yes
-            deploy
+          command: d1 execute subtitle_db --remote --file=./schema.sql --yes
+
+      - name: Deploy Worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CF_API_TOKEN }}
+          accountId: ${{ secrets.CF_ACCOUNT_ID }}
+          command: deploy
