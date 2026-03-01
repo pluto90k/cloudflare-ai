@@ -1,25 +1,39 @@
-# Cloudflare AI Worker 최종 보고서 및 한계점
+# Cloudflare AI 자막 추출 시스템 (TS List 비동기 방식)
 
-HLS 오디오 세그먼트를 Cloudflare Workers AI (`whisper-large-v3-turbo`)를 통해 자막(VTT)으로 생성하는 시스템 구현 및 검증 결과입니다.
+어제 성공했던 **TS List 처리 방식(30초 청크 + 문맥 유지)**을 Cloudflare Queue와 D1을 활용한 비동기 아키텍처로 구현 완료했습니다.
 
-## 1. 아키텍처 성과 (30초 청크 처리)
+## 1. 주요 구현 사항
 
-Cloudflare의 Payload 한계치(5006 Error)와 Whisper 모델의 네이티브 분석 윈도우 한계를 우회하기 위해 **30초 단위 묶음 처리 (Chunking)** 구조를 성공적으로 구현했습니다.
+1. **비동기 큐 처리**: `/process-ts` 호출 시 작업을 Queue에 등록하고 즉시 응답합니다.
+2. **30초 청크 최적화**: 큐 워커에서 TS 파일들을 30초 단위(3개 세그먼트)로 묶어 처리하여 페이로드 에러를 방지합니다.
+3. **문맥 유지 (Iterative Prompting)**: 이전 청크의 텍스트 결과를 다음 청크의 `initial_prompt`로 전달하여 문장의 연속성을 확보합니다.
+4. **상태 관리**: D1 데이터베이스를 통해 작업 상태(`processing`, `completed`, `failed`)를 실시간으로 추적합니다.
 
-1. **에러 해결**: 70초 이상의 대용량 오디오 전송 시 발생하는 서버 에러 완벽 회피.
-2. **문맥 연속성 (Iterative Prompting)**: 30초 단위로 끊어진 조각 사이에 `initial_prompt`를 주입하여 한국어 문법 및 말의 흐름이 놀랍도록 매끄럽게 추출되도록 설계되었습니다.
-3. **모델 폴백 (Best-Effort)**: 빠르고 정확한 `large-v3-turbo`를 메인으로, 장애 시 표준 `whisper`로 우회하는 안정성을 확보했습니다.
+## 2. 사용 방법
 
-## 2. 🚨 확인된 치명적 결함: Whisper 고유의 환각 증세
+### 1단계: 작업 고유 ID 및 TS URL 리스트 준비
+```json
+{
+  "jobId": "my-video-001",
+  "tsUrls": [
+    "https://example.com/seg1.ts",
+    "https://example.com/seg2.ts",
+    "https://example.com/seg3.ts"
+  ],
+  "language": "ko"
+}
+```
 
-전체 70초 분량을 끊임없이 전사하는 데는 성공했으나, **빈 오디오 구간(말소리가 없는 침묵이나 노이즈)**에서 모델이 제멋대로 문자를 지어내는 **환각(Hallucination)** 버그가 치명적인 장애물로 대두되었습니다.
+### 2단계: 작업 요청 (POST /process-ts)
+```bash
+curl -X POST "https://your-worker.workers.dev/process-ts" \
+  -H "Content-Type: application/json" \
+  -d @payload.json
+```
 
-- **원인**: Whisper 모델 특성상 "빈 구간"을 스스로 걸러내지 못하고 잡음을 억지로 텍스트(주로 일본어나 힌디어)로 해석하려는 성향이 있습니다.
-- **언어 고정의 한계**: `language: "ko"` 옵션 강제 주입으로 일본어(`あった!わぁ...`)는 어느 정도 억제했으나, 힌디어(`यह लाँवाँ...`) 등 예상치 못한 환각이 튀어나오는 것은 근본적으로 막을 수 없었습니다.
-- **필터링 로직의 한계**: 특정 환각 단어를 하드코딩으로 지우는 것은 임시방편일 뿐, 모든 패턴을 대비할 수 없어 지속 가능한 해결책이 될 수 없습니다.
+### 3단계: 상태 확인 및 결과 다운로드
+- 상태 확인: `GET /status?jobId=my-video-001`
+- VTT 다운로드: `GET /get-final-vtt?jobId=my-video-001`
 
-## 3. 최종 결론 및 향후 방향
-현재의 Cloudflare Workers AI + Whisper 모델 조합은 별도의 VAD(음성 감지) 전처리 없이는 **프로덕션 레벨의 자막 생성용으로 단독 사용하기에 매우 부적합하다**는 결론을 내렸습니다.
-
-따라서 현재 코드는 **학습 및 연구용, 혹은 말소리가 끊이지 않는 100% 꽉 찬 소스에서만** 사용해야 합니다. 
-보다 완벽한 상용 자막 API 구축을 위해서는 **내장 VAD 처리가 우수한 외부 검증 API (예: OpenAI 공식 API 등)**로 방향을 선회하는 것이 효율적입니다.
+## 3. 테스트 스크립트
+`/Users/jooyoungkim/Develop/wecandeo/cloudflare-ai/test_subtitle.sh` 파일을 사용하여 전체 과정을 테스트할 수 있습니다. (파일 내 `WORKER_URL`을 본인의 URL로 수정 후 실행하세요)
