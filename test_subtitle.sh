@@ -9,9 +9,9 @@ LANGUAGE="ko"
 # 테스트용 TS 파일 리스트 (예시)
 # 실제 테스트 시에는 접근 가능한 URL로 변경하세요.
 TS_URLS='[
-  "https://pub-84733434645248fea26159f8c6792671.r2.dev/audio_segment_0.ts",
-  "https://pub-84733434645248fea26159f8c6792671.r2.dev/audio_segment_1.ts",
-  "https://pub-84733434645248fea26159f8c6792671.r2.dev/audio_segment_2.ts"
+  "https://example.com/audio_segment_0.ts",
+  "https://example.com/audio_segment_1.ts",
+  "https://example.com/audio_segment_2.ts"
 ]'
 
 echo "--- 1. Starting Subtitle Process (TS List) ---"

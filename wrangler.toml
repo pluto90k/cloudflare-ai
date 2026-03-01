@@ -9,9 +9,6 @@ binding = "AI"
 binding = "SUBTITLE_KV"
 id = "d2b887baaf9f4ddbad85f814fe5e836f"
 
-[[r2_buckets]]
-binding = "VIDEO_STORAGE"
-bucket_name = "subtitle-videos"
 
 [[queues.producers]]
 queue = "subtitle-queue"

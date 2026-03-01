@@ -7,10 +7,6 @@ export default {
             return await handleProcessTs(request, env);
         }
 
-        // Upload single file (Optional)
-        if (request.method === 'POST' && url.pathname === '/upload') {
-            return await handleUpload(request, env);
-        }
 
         if (request.method === 'GET' && url.pathname === '/status') {
             return await handleStatus(request, env);
@@ -73,109 +69,69 @@ async function processQueueMessage(message, env) {
     let allText = "";
 
     try {
-        // Check if it's a 'ts-list' type message
-        if (message.body.type === 'ts-list') {
-            const CHUNK_SIZE = 3; // 3 segments = ~30s (Yesterday's optimum)
+        const CHUNK_SIZE = 3; // 3 segments = ~30s (Yesterday's optimum)
 
-            for (let i = 0; i < tsUrls.length; i += CHUNK_SIZE) {
-                const batchUrls = tsUrls.slice(i, i + CHUNK_SIZE);
-                const chunks = [];
+        for (let i = 0; i < tsUrls.length; i += CHUNK_SIZE) {
+            const batchUrls = tsUrls.slice(i, i + CHUNK_SIZE);
+            const chunks = [];
 
-                // Download segments
-                for (const tsUrl of batchUrls) {
-                    try {
-                        const res = await fetch(tsUrl);
-                        if (res.ok) chunks.push(new Uint8Array(await res.arrayBuffer()));
-                    } catch (e) {
-                        console.error(`Fetch error ${tsUrl}: ${e.message}`);
-                    }
+            // Download segments
+            for (const tsUrl of batchUrls) {
+                try {
+                    const res = await fetch(tsUrl);
+                    if (res.ok) chunks.push(new Uint8Array(await res.arrayBuffer()));
+                } catch (e) {
+                    console.error(`Fetch error ${tsUrl}: ${e.message}`);
                 }
+            }
 
-                if (chunks.length === 0) {
-                    currentOffset += batchUrls.length * 10;
-                    continue;
-                }
-
-                // Merge for this chunk
-                const totalSize = chunks.reduce((acc, c) => acc + c.length, 0);
-                const mergedAudio = new Uint8Array(totalSize);
-                let offset = 0;
-                for (const chunk of chunks) {
-                    mergedAudio.set(chunk, offset);
-                    offset += chunk.length;
-                }
-
-                const aiOptions = {
-                    audio: Array.from(mergedAudio),
-                    task: 'transcribe',
-                    language: language || undefined,
-                    initial_prompt: lastTranscription || undefined
-                };
-
-                // Yesterday's Logic: Large V3 Turbo with Fallback
-                let aiResponse = await env.AI.run('@cf/openai/whisper-large-v3-turbo', aiOptions).catch(() => null);
-                if (!aiResponse || !aiResponse.text) {
-                    aiResponse = await env.AI.run('@cf/openai/whisper', aiOptions).catch(() => null);
-                }
-
-                if (aiResponse && aiResponse.text) {
-                    const cleanText = aiResponse.text.trim();
-                    allText += (allText ? "\n\n" : "") + cleanText;
-                    lastTranscription = cleanText; // Context for next chunk
-                }
-
+            if (chunks.length === 0) {
                 currentOffset += batchUrls.length * 10;
+                continue;
             }
 
-            // Finalize D1
-            await env.SUBTITLE_DB.prepare(
-                "UPDATE jobs SET result = ?, status = 'completed', completed_at = ? WHERE id = ?"
-            ).bind(allText, new Date().toISOString(), jobId).run();
+            // Merge for this chunk
+            const totalSize = chunks.reduce((acc, c) => acc + c.length, 0);
+            const mergedAudio = new Uint8Array(totalSize);
+            let offset = 0;
+            for (const chunk of chunks) {
+                mergedAudio.set(chunk, offset);
+                offset += chunk.length;
+            }
 
-        } else { // Original single file upload logic
-            const { fileName } = message.body;
-            // 1. Get file from R2
-            const object = await env.VIDEO_STORAGE.get(fileName);
-            if (!object) throw new Error('File not found in R2');
-
-            const audioData = await object.arrayBuffer();
-
-            // 2. Transcribe using Workers AI (Whisper)
-            const aiResponse = await env.AI.run('@cf/openai/whisper', {
-                audio: Array.from(new Uint8Array(audioData)),
+            const aiOptions = {
+                audio: Array.from(mergedAudio),
                 task: 'transcribe',
-                language: language || undefined
-            });
+                language: language || undefined,
+                initial_prompt: lastTranscription || undefined
+            };
 
-            // 3. Save result to D1
-            if (aiResponse && aiResponse.text) {
-                await env.SUBTITLE_DB.prepare(
-                    "UPDATE jobs SET result = ?, status = 'completed', completed_at = ? WHERE id = ?"
-                ).bind(aiResponse.text, new Date().toISOString(), jobId).run();
-
-                // Also save to KV for backward compatibility if needed
-                await env.SUBTITLE_KV.put(`final:${jobId}`, aiResponse.text);
+            // Large V3 Turbo with Fallback
+            let aiResponse = await env.AI.run('@cf/openai/whisper-large-v3-turbo', aiOptions).catch(() => null);
+            if (!aiResponse || !aiResponse.text) {
+                aiResponse = await env.AI.run('@cf/openai/whisper', aiOptions).catch(() => null);
             }
 
-            // 4. IMPORTANT: Auto Cleanup R2 (Free Tier management)
-            await env.VIDEO_STORAGE.delete(fileName);
+            if (aiResponse && aiResponse.text) {
+                const cleanText = aiResponse.text.trim();
+                allText += (allText ? "\n\n" : "") + cleanText;
+                lastTranscription = cleanText; // Context for next chunk
+            }
+
+            currentOffset += batchUrls.length * 10;
         }
+
+        // Finalize D1
+        await env.SUBTITLE_DB.prepare(
+            "UPDATE jobs SET result = ?, status = 'completed', completed_at = ? WHERE id = ?"
+        ).bind(allText, new Date().toISOString(), jobId).run();
 
     } catch (e) {
         console.error(`Queue error ${jobId}:`, e);
         await env.SUBTITLE_DB.prepare(
             "UPDATE jobs SET status = 'failed', error = ? WHERE id = ?"
         ).bind(e.message, jobId).run();
-
-        // Cleanup R2 if it was a file upload and failed
-        if (message.body.type !== 'ts-list' && message.body.fileName) {
-            await env.VIDEO_STORAGE.delete(message.body.fileName);
-        }
     }
-}
-
-async function handleUpload(request, env) {
-    return new Response('Deprecated: Use /process-ts with tsUrls list', { status: 400 });
 }
 
 async function handleStatus(request, env) {

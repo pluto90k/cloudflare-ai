@@ -13,12 +13,7 @@ npx wrangler d1 create subtitle_db
 - 실행 후 출력되는 `database_id`를 복사하여 `wrangler.toml` 파일의 28라인에 붙여넣으세요.
 - 예: `database_id = "your-new-db-id-here"`
 
-### 1.2. R2 버킷 생성
-```bash
-npx wrangler r2 bucket create subtitle-videos
-```
-
-### 1.3. Queue 생성
+### 1.2. Queue 생성
 ```bash
 npx wrangler queues create subtitle-queue
 ```
