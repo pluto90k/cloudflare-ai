@@ -25,4 +25,4 @@ max_batch_timeout = 30
 [[d1_databases]]
 binding = "SUBTITLE_DB"
 database_name = "subtitle_db"
-database_id = "45804a5b-fcec-42db-990c-200e60cdc51d" # 사용자가 생성 후 ID를 입력해야 함
+database_id = "8efe110e-b2cc-4758-9e8c-45841be4dc0f" # 사용자가 생성 후 ID를 입력해야 함
