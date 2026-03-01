@@ -7,4 +7,22 @@ binding = "AI"
 
 [[kv_namespaces]]
 binding = "SUBTITLE_KV"
-id = "d2b887baaf9f4ddbad85f814fe5e836f" # User will need to replace this with their actual KV ID
+id = "d2b887baaf9f4ddbad85f814fe5e836f"
+
+[[r2_buckets]]
+binding = "VIDEO_STORAGE"
+bucket_name = "subtitle-videos"
+
+[[queues.producers]]
+queue = "subtitle-queue"
+binding = "SUBTITLE_QUEUE"
+
+[[queues.consumers]]
+queue = "subtitle-queue"
+max_batch_size = 1
+max_batch_timeout = 30
+
+[[d1_databases]]
+binding = "SUBTITLE_DB"
+database_name = "subtitle_db"
+database_id = "45804a5b-fcec-42db-990c-200e60cdc51d" # 사용자가 생성 후 ID를 입력해야 함
